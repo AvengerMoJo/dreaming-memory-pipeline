@@ -1,0 +1,190 @@
+"""
+API-based LLM Interface
+
+Interface for interacting with various API-based LLM backends
+like OpenAI, Claude, Deepseek, etc.
+"""
+
+from typing import Dict, List, Any
+import os
+import requests
+import json
+
+from dreaming.llm.base import BaseLLMInterface
+
+
+class APILLMInterface(BaseLLMInterface):
+    """Interface for API-based LLM models like OpenAI, Claude, Deepseek, etc."""
+
+    def __init__(self,
+                 provider: str,
+                 api_key: str | None = None,
+                 model: str | None = None,
+                 config: Dict[str, Any] | None = None):
+        """
+        Initialize the API LLM interface
+
+        Args:
+            provider: Name of the LLM provider (openai, claude, deepseek, etc.)
+            api_key: API key for the provider
+            model: Model name to use
+            config: Additional configuration parameters
+        """
+        super().__init__()
+        self.provider = provider.lower()
+        self.api_key = api_key or os.environ.get(f"{provider.upper()}_API_KEY")
+        self.config = config or {}
+
+        self.url = self.config.get('base_url') or self.config.get('url') or ""
+        self.model = model or self.config.get('model')
+        self.headers = {
+            "Content-Type": "application/json",
+        }
+
+        self._configure_provider()
+
+    def _configure_provider(self):
+        """Configure provider-specific settings"""
+        if self.provider == "openai":
+            base_url = self.config.get('base_url', "https://api.openai.com/v1")
+            self.url = f"{base_url.rstrip('/')}/chat/completions"
+            self.model = self.model or "gpt-4o-mini"
+            self.context_limit = self.config.get('context_limit', 128000)
+            self.output_limit = self.config.get('output_limit', 16384)
+            self.headers['Authorization'] = f"Bearer {self.api_key}"
+            self.message_format = "openai"
+
+        elif self.provider == "claude":
+            self.url = self.url or "https://api.anthropic.com/v1/messages"
+            self.model = self.model or "claude-3-5-sonnet-20241022"
+            self.context_limit = self.config.get('context_limit', 200000)
+            self.output_limit = self.config.get('output_limit', 8192)
+            self.headers['x-api-key'] = self.api_key or ""
+            self.headers['anthropic-version'] = "2023-06-01"
+            self.message_format = "anthropic"
+
+        elif self.provider == "deepseek":
+            self.url = self.url or "https://api.deepseek.com/v1/chat/completions"
+            self.model = self.model or "deepseek-chat"
+            self.context_limit = self.config.get('context_limit', 64000)
+            self.output_limit = self.config.get('output_limit', 8000)
+            self.headers['Authorization'] = f"Bearer {self.api_key}"
+            self.message_format = "openai"
+
+        elif self.provider == "perplexity":
+            self.url = self.url or "https://api.perplexity.ai/chat/completions"
+            self.model = self.model or "sonar-pro"
+            self.context_limit = self.config.get('context_limit', 128000)
+            self.output_limit = self.config.get('output_limit', 32768)
+            self.headers['Authorization'] = f"Bearer {self.api_key}"
+            self.message_format = "openai"
+            self.search_enabled = True
+
+        elif self.provider == "local_api":
+            self.url = self.url or "http://localhost:8080/v1/chat/completions"
+            self.model = self.model or "local-model"
+            self.context_limit = self.config.get('context_limit', 16384)
+            self.output_limit = self.config.get('output_limit', 8192)
+            self.message_format = "openai"
+
+        elif self.provider == "xai":
+            self.url = self.url or "https://api.x.ai/v1/chat/completions"
+            self.model = self.model or "grok-2-1212"
+            self.context_limit = self.config.get('context_limit', 131072)
+            self.output_limit = self.config.get('output_limit', 32768)
+            self.headers['Authorization'] = f"Bearer {self.api_key}"
+            self.message_format = "openai"
+
+        elif self.provider == "deepinfra":
+            self.url = self.url or "https://api.deepinfra.com/v1/openai/chat/completions"
+            self.model = self.model or "meta-llama/Llama-3.3-70B-Instruct-Turbo"
+            self.context_limit = self.config.get('context_limit', 128000)
+            self.output_limit = self.config.get('output_limit', 32768)
+            self.headers['Authorization'] = f"Bearer {self.api_key}"
+            self.message_format = "openai"
+
+        elif self.provider == "groq":
+            self.url = self.url or "https://api.groq.com/openai/v1/chat/completions"
+            self.model = self.model or "llama-3.3-70b-versatile"
+            self.context_limit = self.config.get('context_limit', 128000)
+            self.output_limit = self.config.get('output_limit', 32768)
+            self.headers['Authorization'] = f"Bearer {self.api_key}"
+            self.message_format = "openai"
+
+        else:
+            raise ValueError(f"Unsupported provider: {self.provider}")
+
+    def _format_openai_messages(self, query: str, context_text: str) -> list[dict[str, str]]:
+        """Format messages for OpenAI-compatible API"""
+        system_message = f"You are a helpful AI assistant.\n\nCONTEXT INFORMATION:\n{context_text}\n\nRespond based on context when available."
+        return [
+            {"role": "system", "content": system_message},
+            {"role": "user", "content": query}
+        ]
+
+    def _format_anthropic_messages(self, query: str, context_text: str) -> list[dict[str, str]]:
+        """Format messages for Anthropic Claude API"""
+        return [
+            {"role": "user", "content": f"CONTEXT INFORMATION:\n{context_text}\n\nUSER QUERY:\n{query}"}
+        ]
+
+    def generate_response(self, query: str, context: List[Dict[str, Any]] | None = None) -> str:
+        """Generate a response using the API-based LLM"""
+        try:
+            context_text = self.format_context(context) if context else "No context available."
+
+            payload = {
+                "model": self.model or "unknown",
+                "messages": [{"role": "user", "content": query}],
+                "temperature": 0.7,
+                "max_tokens": 1000,
+            }
+
+            if self.message_format == "openai":
+                messages = self._format_openai_messages(query, context_text)
+                payload.update({
+                    "model": self.model,
+                    "messages": messages,
+                    "max_tokens": min(2048, self.output_limit),
+                })
+                if hasattr(self, 'search_enabled') and self.search_enabled:
+                    payload["search"] = True
+
+            elif self.message_format == "anthropic":
+                messages = self._format_anthropic_messages(query, context_text)
+                payload.update({
+                    "model": self.model,
+                    "messages": messages,
+                    "system": "You are a helpful AI assistant.",
+                    "max_tokens": min(2048, self.output_limit),
+                })
+
+            response = requests.post(
+                self.url,
+                headers=self.headers,
+                json=payload,
+                timeout=60
+            )
+
+            if response.status_code == 200:
+                response_data = response.json()
+
+                if self.message_format == "openai":
+                    return response_data['choices'][0]['message']['content'].strip()
+                elif self.message_format == "anthropic":
+                    return response_data['content'][0]['text'].strip()
+
+            else:
+                self.logger.error(f"API Error: {response.status_code} - {response.text}")
+                return self._fallback_response(query, context or [])
+
+        except Exception as e:
+            self.logger.error(f"Error generating API response: {e}")
+            return self._fallback_response(query, context or [])
+
+        return self._fallback_response(query, context or [])
+
+    def _fallback_response(self, query: str, context: List[Dict[str, Any]] | None = None) -> str:
+        """Provide a fallback response when API call fails"""
+        context_info = f"(with {len(context)} context items)" if context else "(without context)"
+        return f"Could not generate response {context_info}. Issue connecting to {self.provider.capitalize()} API."
