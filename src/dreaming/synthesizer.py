@@ -111,10 +111,12 @@ class DreamingSynthesizer:
 
         except Exception as e:
             llm_info = self._get_llm_info()
-            self._log(f"Error in LLM synthesis: {e}", "error")
-            raise RuntimeError(
-                f"Dreaming B->C failed (no fallback). provider={llm_info.get('provider')} model={llm_info.get('model')} error={e}"
-            ) from e
+            self._log(
+                f"LLM synthesis failed (provider={llm_info.get('provider')} model={llm_info.get('model')}), "
+                f"using rule-based fallback. error={e}",
+                "warning"
+            )
+            return self._fallback_clustering(chunks, session_id)
 
     def _parse_llm_response(self, response: str) -> Dict[str, Any]:
         response_clean = response.strip()

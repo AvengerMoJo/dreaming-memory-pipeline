@@ -109,10 +109,12 @@ class ConversationChunker:
 
         except Exception as e:
             llm_info = self._get_llm_info()
-            self._log(f"Error in LLM chunking: {e}", "error")
-            raise RuntimeError(
-                f"Dreaming A->B failed (no fallback). provider={llm_info.get('provider')} model={llm_info.get('model')} error={e}"
-            ) from e
+            self._log(
+                f"LLM chunking failed (provider={llm_info.get('provider')} model={llm_info.get('model')}), "
+                f"using rule-based fallback. error={e}",
+                "warning"
+            )
+            return self._fallback_chunking(conversation_id, conversation_text)
 
     def _parse_llm_response(self, response: str) -> Dict[str, Any]:
         """Parse LLM JSON response with multi-pass fallbacks"""
