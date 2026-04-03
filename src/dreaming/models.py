@@ -205,6 +205,50 @@ class DArchive:
 
 
 @dataclass
+class KnowledgeUnit:
+    """
+    Atomic fact extracted from a document.
+
+    Represents one self-contained proposition supported by a direct quote
+    from the source text. Unlike BChunks (which segment conversations),
+    KnowledgeUnits distill documents into independently meaningful facts
+    optimised for embedding and retrieval — each unit is one idea, no more.
+
+    Links are computed post-extraction via entity/label overlap, forming
+    a lightweight knowledge chain across the document.
+    """
+
+    id: str
+    doc_id: str                             # Source document ID
+    core_meaning: str                       # The atomic proposition (1 sentence)
+    quote: str                              # Exact supporting quote from source
+
+    labels: List[str] = field(default_factory=list)
+    entities: List[str] = field(default_factory=list)
+    links: List[str] = field(default_factory=list)   # IDs of related KnowledgeUnits
+
+    confidence: float = 1.0
+    position: float = 0.0                   # Relative position in document (0–1)
+    embedding: Optional[List[float]] = None
+
+    created_at: datetime = field(default_factory=datetime.now)
+
+    def to_dict(self) -> Dict[str, Any]:
+        data = asdict(self)
+        data['created_at'] = self.created_at.isoformat()
+        return data
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> 'KnowledgeUnit':
+        data = dict(data)
+        data['created_at'] = datetime.fromisoformat(data['created_at'])
+        return cls(**data)
+
+    def to_json(self) -> str:
+        return json.dumps(self.to_dict(), indent=2)
+
+
+@dataclass
 class DreamingStats:
     """Statistics for dreaming pipeline execution"""
 

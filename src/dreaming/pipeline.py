@@ -306,6 +306,119 @@ class DreamingPipeline:
             ]
         }
 
+    async def process_document(
+        self,
+        doc_id: str,
+        document_text: str,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Process a document through atomic fact extraction → D archival.
+
+        Unlike process_conversation() which chunks conversations (A→B→C→D),
+        this path extracts KnowledgeUnits — each a self-contained proposition
+        with a source quote and inter-unit links computed via entity/label overlap.
+
+        Use this for: research reports, articles, design docs, task outputs.
+        Use process_conversation() for: task session logs, chat histories.
+        """
+        from dreaming.atomic_extractor import AtomicFactExtractor
+
+        self._log(f"Processing document: {doc_id}")
+
+        metadata = metadata or {}
+        results = {
+            "doc_id": doc_id,
+            "mode": "document",
+            "quality_level": self.quality_level,
+            "started_at": datetime.now().isoformat(),
+            "stages": {},
+        }
+
+        try:
+            extractor = AtomicFactExtractor(
+                llm_interface=self.llm,
+                quality_level=self.quality_level,
+                logger=self._logger,
+            )
+            units = await extractor.extract_units(doc_id, document_text, metadata)
+            results["stages"]["knowledge_units"] = {
+                "count": len(units),
+                "unit_ids": [u.id for u in units],
+                "total_links": sum(len(u.links) for u in units),
+            }
+            self._log(f"Extracted {len(units)} knowledge units")
+
+            # Archive directly — units are already atomic, C clustering not needed
+            latest_version = self.storage.get_latest_version(doc_id)
+            previous_version = latest_version if latest_version > 0 else None
+            next_version = latest_version + 1
+
+            archive_data = self._create_document_archive_data(
+                doc_id=doc_id,
+                version=next_version,
+                previous_version=previous_version,
+                units=units,
+                metadata=metadata,
+            )
+            self.storage.save_archive(doc_id, next_version, archive_data)
+            self._update_manifest_for_new_version(
+                conversation_id=doc_id,
+                new_version=next_version,
+                previous_version=previous_version,
+            )
+
+            results["stages"]["D_archive"] = {
+                "archive_id": archive_data["id"],
+                "version": next_version,
+                "knowledge_units_count": len(units),
+                "previous_version": previous_version,
+            }
+            results["completed_at"] = datetime.now().isoformat()
+            results["status"] = "success"
+            return results
+
+        except Exception as e:
+            self._log(f"Document pipeline error: {e}", "error")
+            results["completed_at"] = datetime.now().isoformat()
+            results["status"] = "failed"
+            results["error"] = str(e)
+            return results
+
+    def _create_document_archive_data(
+        self,
+        doc_id: str,
+        version: int,
+        previous_version: Optional[int],
+        units: list,
+        metadata: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        all_entities: set = set()
+        for unit in units:
+            all_entities.update(unit.entities)
+
+        return {
+            "id": f"d_{doc_id}",
+            "conversation_id": doc_id,
+            "version": version,
+            "mode": "document",
+            "quality_level": self.quality_level,
+            "created_at": datetime.now().isoformat(),
+            "entities": list(all_entities),
+            "relationships": [],
+            "metadata": {
+                **metadata,
+                "previous_version": previous_version,
+                "supersedes_version": previous_version,
+                "is_latest": True,
+                "status": "active",
+                "storage_location": "hot",
+            },
+            "b_chunks": [],
+            "c_clusters": [],
+            "knowledge_units": [u.to_dict() for u in units],
+        }
+
     async def upgrade_quality(
         self,
         conversation_id: str,
