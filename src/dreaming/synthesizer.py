@@ -30,6 +30,7 @@ INSTRUCTIONS:
    - type: One of [TOPIC, RELATIONSHIP, TIMELINE, SUMMARY]
    - title: Concise cluster name
    - summary: 1-2 sentence synthesis
+   - key_facts: Complete list of ALL specific facts, events, states, and attributes found in the cluster's chunks — one atomic statement per entry (e.g. "Alice moved to Paris in 2020", "Bob is married with two children", "The meeting happened on 3 June 2023"). Do NOT omit facts to keep the list short.
    - chunk_ids: List of chunk IDs in this cluster
    - entities: Key entities/concepts
    - insights: Novel connections or patterns discovered
@@ -43,6 +44,7 @@ OUTPUT FORMAT (JSON):
       "type": "TOPIC",
       "title": "<cluster name>",
       "summary": "<synthesis of cluster content>",
+      "key_facts": ["<specific factual statement>", "<another fact>"],
       "chunk_ids": ["b_xxx_0", "b_xxx_2"],
       "entities": ["<entity1>", "<entity2>"],
       "insights": ["<insight1>", "<insight2>"],
@@ -282,6 +284,8 @@ class DreamingSynthesizer:
                 c_cluster.__dict__['quality_level'] = self.quality_level
                 c_cluster.__dict__['needs_upgrade'] = (self.quality_level == "basic")
                 c_cluster.__dict__['llm_used'] = llm_info.get("model")
+                raw_facts = cluster_data.get("key_facts", [])
+                c_cluster.__dict__['key_facts'] = raw_facts if isinstance(raw_facts, list) else []
 
             c_clusters.append(c_cluster)
 

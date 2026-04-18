@@ -289,7 +289,8 @@ class DreamingPipeline:
                     "labels": c.labels,
                     "speaker": c.speaker,
                     "entities": c.entities,
-                    "confidence": c.confidence
+                    "confidence": c.confidence,
+                    "key_facts": getattr(c, "key_facts", c.__dict__.get("key_facts", [])),
                 }
                 for c in b_chunks
             ],
@@ -300,7 +301,8 @@ class DreamingPipeline:
                     "theme": c.theme,
                     "content": c.content,
                     "related_chunks": c.related_chunks,
-                    "confidence": c.confidence
+                    "confidence": c.confidence,
+                    "key_facts": getattr(c, "key_facts", c.__dict__.get("key_facts", [])),
                 }
                 for c in c_clusters
             ]

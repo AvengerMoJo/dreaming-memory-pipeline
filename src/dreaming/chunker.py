@@ -40,7 +40,8 @@ OUTPUT FORMAT (JSON):
       "labels": ["<tag1>", "<tag2>"],
       "speaker": "<user|assistant|system>",
       "entities": ["<entity1>", "<entity2>"],
-      "summary": "<one-sentence summary>"
+      "summary": "<one-sentence summary>",
+      "key_facts": ["<specific factual statement, e.g. 'Alice moved to Paris in 2020'>", "<e.g. 'Bob is married with two children'>"]
     }}
   ]
 }}
@@ -294,6 +295,8 @@ class ConversationChunker:
                 b_chunk.__dict__['needs_upgrade'] = (self.quality_level == "basic")
                 b_chunk.__dict__['llm_used'] = llm_info.get("model")
                 b_chunk.__dict__['language'] = chunk_data.get("language", "unknown")
+                raw_facts = chunk_data.get("key_facts", [])
+                b_chunk.__dict__['key_facts'] = raw_facts if isinstance(raw_facts, list) else []
 
             b_chunks.append(b_chunk)
 
