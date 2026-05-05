@@ -336,6 +336,9 @@ class ConversationChunker:
             elif para.lower().startswith(("assistant:", "ai:")):
                 speaker = "assistant"
 
+            # Extract entities from the text using simple patterns
+            entities = self._extract_entities_from_text(para)
+
             b_chunk = BChunk(
                 id=chunk_id,
                 parent_id=parent_id,
@@ -343,7 +346,7 @@ class ConversationChunker:
                 content=para,
                 labels=[],
                 speaker=speaker,
-                entities=[],
+                entities=entities,
                 confidence=0.5,
                 token_range=(i * 100, (i + 1) * 100),
                 position_in_parent=i / len(paragraphs) if paragraphs else 0.0,
@@ -363,3 +366,40 @@ class ConversationChunker:
             b_chunks.append(b_chunk)
 
         return b_chunks
+
+    def _extract_entities_from_text(self, text: str) -> List[str]:
+        """Extract entities from text using simple patterns"""
+        import re
+        entities = []
+
+        # Extract URLs
+        url_pattern = r'https?://[^\s]+'
+        urls = re.findall(url_pattern, text)
+        entities.extend(urls[:5])  # Limit to 5 URLs
+
+        # Extract file paths
+        path_pattern = r'[/\\][a-zA-Z0-9_./\\-]+\.[a-zA-Z]{2,}'
+        paths = re.findall(path_pattern, text)
+        entities.extend([p for p in paths if len(p) > 5][:3])
+
+        # Extract quoted strings (potential names/terms)
+        quote_pattern = r'"([^"]+)"'
+        quotes = re.findall(quote_pattern, text)
+        entities.extend([q for q in quotes if len(q) > 3 and len(q) < 100][:5])
+
+        # Extract capitalized words (potential proper nouns)
+        capital_pattern = r'\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*\b'
+        capitals = re.findall(capital_pattern, text)
+        # Filter out common words
+        common_words = {'The', 'This', 'That', 'What', 'How', 'When', 'Where', 'Why', 'Who', 'I', 'You', 'We', 'They', 'It'}
+        entities.extend([c for c in capitals if c not in common_words and len(c) > 2][:5])
+
+        # Deduplicate while preserving order
+        seen = set()
+        unique_entities = []
+        for e in entities:
+            if e.lower() not in seen:
+                seen.add(e.lower())
+                unique_entities.append(e)
+
+        return unique_entities[:10]  # Limit to 10 entities

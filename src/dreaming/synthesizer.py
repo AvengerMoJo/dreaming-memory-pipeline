@@ -306,28 +306,55 @@ class DreamingSynthesizer:
         chunks: List[BChunk],
         session_id: str
     ) -> List[CCluster]:
+        """Improved rule-based fallback clustering"""
         self._log("Using rule-based fallback clustering", "warning")
         llm_info = self._get_llm_info()
 
+        # Group by labels if available
         label_groups = defaultdict(list)
         for chunk in chunks:
             for label in chunk.labels:
                 label_groups[label].append(chunk)
 
+        # If no labels, group by speaker
         if not label_groups:
-            label_groups["general"] = chunks
+            speaker_groups = defaultdict(list)
+            for chunk in chunks:
+                speaker_groups[chunk.speaker].append(chunk)
+            label_groups = speaker_groups
+
+        # If still no groups, create one group per chunk (topic-boundary chunking)
+        if not label_groups:
+            label_groups = {f"segment_{i}": [chunk] for i, chunk in enumerate(chunks)}
 
         c_clusters = []
         for i, (label, grouped_chunks) in enumerate(label_groups.items()):
             cluster_id = f"c_{session_id}_{i}_fallback"
 
+            # Extract entities from all chunks in this cluster
+            all_entities = set()
+            for chunk in grouped_chunks:
+                all_entities.update(chunk.entities)
+
+            # Extract key facts from chunks
+            all_key_facts = []
+            for chunk in grouped_chunks:
+                key_facts = getattr(chunk, 'key_facts', chunk.__dict__.get('key_facts', []))
+                if isinstance(key_facts, list):
+                    all_key_facts.extend(key_facts)
+
+            # Create a more meaningful content summary
+            content = f"Topic: {label}"
+            if all_entities:
+                content += f" | Entities: {', '.join(list(all_entities)[:5])}"
+
             c_cluster = CCluster(
                 id=cluster_id,
                 cluster_type=ClusterType.TOPIC,
-                content=f"Chunks related to {label}",
+                content=content,
                 related_chunks=[c.id for c in grouped_chunks],
                 theme=f"Topic: {label}",
-                confidence=0.5,
+                confidence=0.7,
                 created_at=datetime.now()
             )
 
@@ -339,6 +366,8 @@ class DreamingSynthesizer:
                 c_cluster.__dict__['fallback_reason'] = "llm_synthesis_parse_or_generation_failed"
                 c_cluster.__dict__['llm_provider'] = llm_info.get("provider", "unknown")
                 c_cluster.__dict__['model'] = llm_info.get("model", "unknown")
+                c_cluster.__dict__['entities'] = list(all_entities)
+                c_cluster.__dict__['key_facts'] = all_key_facts[:10]
 
             c_clusters.append(c_cluster)
 

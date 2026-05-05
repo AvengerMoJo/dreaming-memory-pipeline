@@ -200,12 +200,31 @@ class DreamingPipeline:
             previous_version = latest_version if latest_version > 0 else None
             next_version = latest_version + 1
 
+            # Stage 3.5: Extract knowledge units from the conversation
+            knowledge_units = []
+            try:
+                from dreaming.atomic_extractor import AtomicFactExtractor
+                extractor = AtomicFactExtractor(
+                    llm_interface=self.llm,
+                    quality_level=self.quality_level,
+                    logger=self._logger
+                )
+                knowledge_units = await extractor.extract_units(
+                    doc_id=conversation_id,
+                    document_text=conversation_text,
+                    metadata=metadata
+                )
+                self._log(f"Extracted {len(knowledge_units)} knowledge units")
+            except Exception as e:
+                self._log(f"Knowledge unit extraction failed (non-fatal): {e}", "warning")
+
             archive_data = self._create_archive_data(
                 conversation_id=conversation_id,
                 version=next_version,
                 previous_version=previous_version,
                 b_chunks=b_chunks,
                 c_clusters=c_clusters,
+                knowledge_units=knowledge_units,
                 metadata=metadata
             )
 
@@ -222,6 +241,7 @@ class DreamingPipeline:
                 "version": archive_data["version"],
                 "entities_count": len(archive_data["entities"]),
                 "relationships_count": len(archive_data["relationships"]),
+                "knowledge_units_count": len(archive_data.get("knowledge_units", [])),
                 "previous_version": archive_data["metadata"].get("previous_version"),
                 "supersedes_version": archive_data["metadata"].get("supersedes_version"),
                 "status": archive_data["metadata"].get("status"),
@@ -248,9 +268,10 @@ class DreamingPipeline:
         previous_version: Optional[int],
         b_chunks: List[BChunk],
         c_clusters: List[CCluster],
-        metadata: Dict[str, Any]
+        knowledge_units: Optional[List[Any]] = None,
+        metadata: Dict[str, Any] = None
     ) -> Dict[str, Any]:
-        """Create serialized archive dict from B chunks and C clusters"""
+        """Create serialized archive dict from B chunks, C clusters, and knowledge units"""
 
         # Collect all entities
         all_entities = set()
@@ -305,6 +326,16 @@ class DreamingPipeline:
                     "key_facts": getattr(c, "key_facts", c.__dict__.get("key_facts", [])),
                 }
                 for c in c_clusters
+            ],
+            "knowledge_units": [
+                {
+                    "id": ku.id if hasattr(ku, 'id') else f"ku_{conversation_id}_{i}",
+                    "content": ku.content if hasattr(ku, 'content') else str(ku),
+                    "labels": ku.labels if hasattr(ku, 'labels') else [],
+                    "entities": ku.entities if hasattr(ku, 'entities') else [],
+                    "confidence": ku.confidence if hasattr(ku, 'confidence') else 0.5,
+                }
+                for i, ku in enumerate(knowledge_units or [])
             ]
         }
 
