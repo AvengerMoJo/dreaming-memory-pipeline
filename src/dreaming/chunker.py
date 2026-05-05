@@ -2,6 +2,7 @@
 Conversation Chunker - A→B Conversion
 
 Transforms raw conversations (A) into semantic chunks (B) using LLM.
+Extracts entities, key_facts, labels, and speaker metadata per chunk.
 """
 
 import json
@@ -23,28 +24,31 @@ INSTRUCTIONS:
 3. Extract metadata for each chunk:
    - labels: List of topic tags (e.g., ["technical", "architecture", "billing"])
    - speaker: Who is speaking (user/assistant/system)
-   - entities: Named entities mentioned (people, products, concepts)
+   - entities: Named entities mentioned (people, products, concepts, tools, organizations) — extract ALL named entities
    - summary: One-sentence summary of the chunk
+   - key_facts: List of specific factual statements found in this chunk — one per entry (e.g., "Alice moved to Paris in 2020", "Bob is married with two children")
 
 IMPORTANT:
 - Preserve the ORIGINAL language of each chunk (do not translate)
 - Multi-lingual conversations: Keep each language as-is
 - Detect language per chunk: "zh", "en", "ja", etc.
+- Extract as many entities as possible — do not omit named concepts
+- Extract key_facts even if the chunk is short — every factual statement counts
 
 OUTPUT FORMAT (JSON):
-{{
+{
   "chunks": [
-    {{
+    {
       "content": "<original text, unchanged>",
       "language": "<detected language code>",
       "labels": ["<tag1>", "<tag2>"],
       "speaker": "<user|assistant|system>",
       "entities": ["<entity1>", "<entity2>"],
       "summary": "<one-sentence summary>",
-      "key_facts": ["<specific factual statement, e.g. 'Alice moved to Paris in 2020'>", "<e.g. 'Bob is married with two children'>"]
-    }}
+      "key_facts": ["<specific factual statement>", "<another fact>"]
+    }
   ]
-}}
+}
 
 Return ONLY valid JSON, no additional text."""
 
@@ -221,40 +225,48 @@ class ConversationChunker:
             results = payload.get("results")
             if isinstance(results, dict) and isinstance(results.get("chunks"), list):
                 return {"chunks": results.get("chunks", [])}
+            if isinstance(payload.get("output"), dict) and isinstance(payload.get("output").get("chunks"), list):
+                return {"chunks": payload.get("output").get("chunks", [])}
             if isinstance(payload.get("items"), list):
                 return {"chunks": payload.get("items", [])}
-            return None
-
-        if isinstance(payload, list):
+            if isinstance(payload.get("segments"), list):
+                return {"chunks": payload.get("segments", [])}
+            if isinstance(payload.get("sections"), list):
+                return {"chunks": payload.get("sections", [])}
+        elif isinstance(payload, list):
             return {"chunks": payload}
-
         return None
 
-    def _repair_json_with_llm(self, raw_text: str) -> Optional[Dict[str, Any]]:
-        """Ask LLM to transform malformed output into strict JSON only."""
-        repair_prompt = (
-            "Convert the following content into STRICT valid JSON with this schema only:\n"
-            '{"chunks":[{"content":"<string>","language":"<string>","labels":["<string>"],"speaker":"<user|assistant|system>","entities":["<string>"],"summary":"<string>"}]}\n'
-            "Return JSON only. No prose, no markdown.\n\n"
-            f"CONTENT:\n{raw_text}"
-        )
-        try:
-            repaired_response = self.llm.generate_response(query=repair_prompt, context=None)
-            repaired_clean = repaired_response.strip()
-            if repaired_clean.startswith("```json"):
-                repaired_clean = repaired_clean[7:]
-            if repaired_clean.startswith("```"):
-                repaired_clean = repaired_clean[3:]
-            if repaired_clean.endswith("```"):
-                repaired_clean = repaired_clean[:-3]
-            repaired_clean = repaired_clean.strip()
+    def _repair_json_with_llm(self, text: str) -> Optional[Dict[str, Any]]:
+        """Ask LLM to repair malformed JSON output."""
+        self._log("Attempting JSON repair via LLM", "info")
+        repair_prompt = f"""The following text contains JSON data but is malformed. Extract the JSON data and return it as a clean JSON object with a 'chunks' key containing a list of chunk objects.
 
-            parsed = json.loads(repaired_clean)
+TEXT:
+{text}
+
+Return ONLY valid JSON:
+{{
+  "chunks": [
+    {{
+      "content": "...",
+      "language": "...",
+      "labels": [...],
+      "speaker": "...",
+      "entities": [...],
+      "summary": "...",
+      "key_facts": [...]
+    }}
+  ]
+}}"""
+        try:
+            response = self.llm.generate_response(query=repair_prompt, context=None)
+            parsed = json.loads(response.strip())
             normalized = self._normalize_chunk_payload(parsed)
             if normalized is not None:
                 return normalized
-        except Exception as e:
-            self._log(f"LLM repair failed: {e}", "error")
+        except Exception:
+            pass
         return None
 
     def _create_b_chunks(
@@ -275,6 +287,21 @@ class ConversationChunker:
             token_start = i * 400
             token_end = token_start + len(chunk_data.get("content", "").split())
 
+            # Extract entities from the LLM output
+            entities = chunk_data.get("entities", [])
+            # Also extract entities from key_facts if entities is empty
+            if not entities:
+                key_facts = chunk_data.get("key_facts", [])
+                for fact in key_facts:
+                    # Extract named entities from facts (capitalized words, etc.)
+                    fact_entities = self._extract_entities_from_text(fact)
+                    entities.extend(fact_entities)
+
+            # Extract key_facts as proper field
+            key_facts = chunk_data.get("key_facts", [])
+            if not isinstance(key_facts, list):
+                key_facts = []
+
             b_chunk = BChunk(
                 id=chunk_id,
                 parent_id=parent_id,
@@ -282,7 +309,8 @@ class ConversationChunker:
                 content=chunk_data.get("content", ""),
                 labels=chunk_data.get("labels", []),
                 speaker=chunk_data.get("speaker", "unknown"),
-                entities=chunk_data.get("entities", []),
+                entities=entities,
+                key_facts=key_facts,
                 confidence=0.9 if self.quality_level == "good" else 0.7,
                 token_range=(token_start, token_end),
                 position_in_parent=i / len(chunks) if chunks else 0.0,
@@ -290,13 +318,11 @@ class ConversationChunker:
                 created_at=datetime.now()
             )
 
-            if hasattr(b_chunk, '__dict__'):
-                b_chunk.__dict__['quality_level'] = self.quality_level
-                b_chunk.__dict__['needs_upgrade'] = (self.quality_level == "basic")
-                b_chunk.__dict__['llm_used'] = llm_info.get("model")
-                b_chunk.__dict__['language'] = chunk_data.get("language", "unknown")
-                raw_facts = chunk_data.get("key_facts", [])
-                b_chunk.__dict__['key_facts'] = raw_facts if isinstance(raw_facts, list) else []
+            # Set quality tracking fields
+            b_chunk.quality_level = self.quality_level
+            b_chunk.needs_upgrade = (self.quality_level == "basic")
+            b_chunk.llm_used = llm_info.get("model")
+            b_chunk.language = chunk_data.get("language", "unknown")
 
             b_chunks.append(b_chunk)
 
@@ -347,6 +373,7 @@ class ConversationChunker:
                 labels=[],
                 speaker=speaker,
                 entities=entities,
+                key_facts=[],
                 confidence=0.5,
                 token_range=(i * 100, (i + 1) * 100),
                 position_in_parent=i / len(paragraphs) if paragraphs else 0.0,
@@ -354,52 +381,32 @@ class ConversationChunker:
                 created_at=datetime.now()
             )
 
-            if hasattr(b_chunk, '__dict__'):
-                b_chunk.__dict__['quality_level'] = "basic"
-                b_chunk.__dict__['needs_upgrade'] = True
-                b_chunk.__dict__['llm_used'] = "fallback"
-                b_chunk.__dict__['used_fallback'] = True
-                b_chunk.__dict__['fallback_reason'] = "llm_chunking_parse_or_generation_failed"
-                b_chunk.__dict__['llm_provider'] = llm_info.get("provider", "unknown")
-                b_chunk.__dict__['model'] = llm_info.get("model", "unknown")
+            b_chunk.quality_level = self.quality_level
+            b_chunk.needs_upgrade = True
+            b_chunk.llm_used = llm_info.get("model")
+            b_chunk.language = "unknown"
 
             b_chunks.append(b_chunk)
 
+        self._log(f"Created {len(b_chunks)} fallback B chunks")
         return b_chunks
 
     def _extract_entities_from_text(self, text: str) -> List[str]:
-        """Extract entities from text using simple patterns"""
-        import re
+        """Simple entity extraction from text using capitalized words and patterns"""
         entities = []
+        # Extract capitalized words (potential named entities)
+        words = text.split()
+        for word in words:
+            # Clean punctuation
+            cleaned = word.strip(".,;:!?()[]{}\"'")
+            if cleaned and len(cleaned) >= 2 and cleaned[0].isupper():
+                entities.append(cleaned)
 
-        # Extract URLs
-        url_pattern = r'https?://[^\s]+'
-        urls = re.findall(url_pattern, text)
-        entities.extend(urls[:5])  # Limit to 5 URLs
-
-        # Extract file paths
-        path_pattern = r'[/\\][a-zA-Z0-9_./\\-]+\.[a-zA-Z]{2,}'
-        paths = re.findall(path_pattern, text)
-        entities.extend([p for p in paths if len(p) > 5][:3])
-
-        # Extract quoted strings (potential names/terms)
-        quote_pattern = r'"([^"]+)"'
-        quotes = re.findall(quote_pattern, text)
-        entities.extend([q for q in quotes if len(q) > 3 and len(q) < 100][:5])
-
-        # Extract capitalized words (potential proper nouns)
-        capital_pattern = r'\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*\b'
-        capitals = re.findall(capital_pattern, text)
-        # Filter out common words
-        common_words = {'The', 'This', 'That', 'What', 'How', 'When', 'Where', 'Why', 'Who', 'I', 'You', 'We', 'They', 'It'}
-        entities.extend([c for c in capitals if c not in common_words and len(c) > 2][:5])
-
-        # Deduplicate while preserving order
+        # Remove duplicates while preserving order
         seen = set()
-        unique_entities = []
+        unique = []
         for e in entities:
-            if e.lower() not in seen:
-                seen.add(e.lower())
-                unique_entities.append(e)
-
-        return unique_entities[:10]  # Limit to 10 entities
+            if e not in seen:
+                seen.add(e)
+                unique.append(e)
+        return unique

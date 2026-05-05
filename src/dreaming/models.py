@@ -25,6 +25,11 @@ class ClusterType(Enum):
     RELATIONSHIP = "relationship"  # Explicit connections
     SUMMARY = "summary"  # High-level overview
     TIMELINE = "timeline"  # Chronological progression
+    DECISION = "decision"  # Explicit decisions made (e.g., chose Docker over bash_exec)
+    OUTCOME = "outcome"  # Concrete results (e.g., briefing saved to ~/.memory/scout_briefing.md)
+    FINDING = "finding"  # Discovered facts (e.g., Rowhammer GPU attacks give complete control)
+    TOOL = "tool"  # Tool usage patterns (e.g., cella should be exercised through tmux)
+    INCOMPLETE = "incomplete"  # Unresolved items that need follow-up
 
 
 class ArchiveStatus(Enum):
@@ -53,6 +58,7 @@ class BChunk:
     labels: List[str] = field(default_factory=list)
     speaker: Optional[str] = None  # user/assistant/system
     entities: List[str] = field(default_factory=list)
+    key_facts: List[str] = field(default_factory=list)  # Atomic facts extracted from chunk
     confidence: float = 1.0  # AI confidence (0-1)
 
     # Position tracking
@@ -111,6 +117,8 @@ class CCluster:
     theme: Optional[str] = None
     participants: List[str] = field(default_factory=list)
     confidence: float = 1.0
+    confidence_level: str = "medium"  # high/medium/low confidence annotation
+    key_facts: List[str] = field(default_factory=list)  # Atomic facts from cluster
 
     # Temporal span
     time_span_start: Optional[datetime] = None
@@ -159,44 +167,42 @@ class CCluster:
 
 
 @dataclass
-class DArchive:
+class KnowledgeUnit:
     """
-    Archived data (D)
+    Atomic knowledge unit (D)
 
-    Stores old/superseded C clusters with versioning
+    A single self-contained proposition, independently meaningful
     """
 
     # Required fields
     id: str
-    archive_type: str  # 'cluster', 'chunk', etc.
-    status: ArchiveStatus
-    reason: str  # Why archived
+    content: str  # The atomic fact / proposition
+    source_doc_id: str  # Which document it came from
 
-    # Version pointers
-    original_id: str  # Original C or B ID
-    new_version_id: Optional[str] = None  # Replacement ID (if superseded)
-    version: int = 1
+    # Anchoring
+    quote: Optional[str] = None  # Direct quote from source text
 
-    # Storage metadata
-    archived_at: datetime = field(default_factory=datetime.now)
-    storage_location: str = "cold"  # hot/warm/cold
-    embedding_removed: bool = True  # Removed from search index
+    # Metadata
+    labels: List[str] = field(default_factory=list)
+    entities: List[str] = field(default_factory=list)
+    confidence: float = 0.5
 
-    # Snapshot
-    content: Dict[str, Any] = field(default_factory=dict)  # Full original data
+    # Links to related units
+    links: List[str] = field(default_factory=list)  # IDs of related KnowledgeUnits
+
+    # Timestamps
+    created_at: datetime = field(default_factory=datetime.now)
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON storage"""
         data = asdict(self)
-        data['status'] = self.status.value
-        data['archived_at'] = self.archived_at.isoformat()
+        data['created_at'] = self.created_at.isoformat()
         return data
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> 'DArchive':
+    def from_dict(cls, data: Dict[str, Any]) -> 'KnowledgeUnit':
         """Create from dictionary"""
-        data['status'] = ArchiveStatus(data['status'])
-        data['archived_at'] = datetime.fromisoformat(data['archived_at'])
+        data['created_at'] = datetime.fromisoformat(data['created_at'])
         return cls(**data)
 
     def to_json(self) -> str:
@@ -205,76 +211,95 @@ class DArchive:
 
 
 @dataclass
-class KnowledgeUnit:
+class DArchive:
     """
-    Atomic fact extracted from a document.
+    Consolidated knowledge archive (D)
 
-    Represents one self-contained proposition supported by a direct quote
-    from the source text. Unlike BChunks (which segment conversations),
-    KnowledgeUnits distill documents into independently meaningful facts
-    optimised for embedding and retrieval — each unit is one idea, no more.
-
-    Links are computed post-extraction via entity/label overlap, forming
-    a lightweight knowledge chain across the document.
+    Final output: B chunks + C clusters + KnowledgeUnits, archived with versioning
     """
 
+    # Required fields
     id: str
-    doc_id: str                             # Source document ID
-    core_meaning: str                       # The atomic proposition (1 sentence)
-    quote: str                              # Exact supporting quote from source
+    conversation_id: str  # Source A chunk ID
+    version: int  # Archive version number
 
-    labels: List[str] = field(default_factory=list)
-    entities: List[str] = field(default_factory=list)
-    links: List[str] = field(default_factory=list)   # IDs of related KnowledgeUnits
+    # Content
+    b_chunks: List[BChunk] = field(default_factory=list)
+    c_clusters: List[CCluster] = field(default_factory=list)
+    knowledge_units: List[KnowledgeUnit] = field(default_factory=list)
 
-    confidence: float = 1.0
-    position: float = 0.0                   # Relative position in document (0–1)
-    embedding: Optional[List[float]] = None
+    # Metadata
+    quality_level: str = "basic"
+    entities: List[str] = field(default_factory=list)  # All entities across chunks/clusters
+    relationships: List[str] = field(default_factory=list)  # Cross-references between clusters
 
+    # Versioning
+    previous_version: Optional[int] = None
+    superseded_by_version: Optional[int] = None
+    is_latest: bool = True
+    status: str = "active"
+    storage_location: str = "hot"
+
+    # Archive metadata
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+    # Timestamps
     created_at: datetime = field(default_factory=datetime.now)
+    updated_at: datetime = field(default_factory=datetime.now)
 
     def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary for JSON storage"""
         data = asdict(self)
         data['created_at'] = self.created_at.isoformat()
+        data['updated_at'] = self.updated_at.isoformat()
+        data['b_chunks'] = [c.to_dict() for c in self.b_chunks]
+        data['c_clusters'] = [c.to_dict() for c in self.c_clusters]
+        data['knowledge_units'] = [u.to_dict() for u in self.knowledge_units]
         return data
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> 'KnowledgeUnit':
-        data = dict(data)
+    def from_dict(cls, data: Dict[str, Any]) -> 'DArchive':
+        """Create from dictionary"""
         data['created_at'] = datetime.fromisoformat(data['created_at'])
+        data['updated_at'] = datetime.fromisoformat(data['updated_at'])
+        data['b_chunks'] = [BChunk.from_dict(c) for c in data.get('b_chunks', [])]
+        data['c_clusters'] = [CCluster.from_dict(c) for c in data.get('c_clusters', [])]
+        data['knowledge_units'] = [KnowledgeUnit.from_dict(u) for u in data.get('knowledge_units', [])]
         return cls(**data)
 
     def to_json(self) -> str:
+        """Convert to JSON string"""
         return json.dumps(self.to_dict(), indent=2)
 
 
-@dataclass
 class DreamingStats:
-    """Statistics for dreaming pipeline execution"""
+    """Summary statistics for a dreaming pipeline run"""
 
-    # Input counts
-    a_chunks_processed: int = 0
-
-    # Output counts
-    b_chunks_created: int = 0
-    b_chunks_updated: int = 0
-    c_clusters_created: int = 0
-    c_clusters_updated: int = 0
-    d_archives_created: int = 0
-
-    # Errors
-    errors: List[str] = field(default_factory=list)
-
-    # Timing
-    started_at: Optional[datetime] = None
-    completed_at: Optional[datetime] = None
-    duration_seconds: float = 0.0
+    def __init__(
+        self,
+        chunks: int = 0,
+        clusters: int = 0,
+        entities: int = 0,
+        knowledge_units: int = 0,
+        quality_level: str = "basic",
+        quality_flags: Optional[List[str]] = None,
+        status: str = "success"
+    ):
+        self.chunks = chunks
+        self.clusters = clusters
+        self.entities = entities
+        self.knowledge_units = knowledge_units
+        self.quality_level = quality_level
+        self.quality_flags = quality_flags or []
+        self.status = status
 
     def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary"""
-        data = asdict(self)
-        if self.started_at:
-            data['started_at'] = self.started_at.isoformat()
-        if self.completed_at:
-            data['completed_at'] = self.completed_at.isoformat()
-        return data
+        return {
+            "chunks": self.chunks,
+            "clusters": self.clusters,
+            "entities": self.entities,
+            "knowledge_units": self.knowledge_units,
+            "quality_level": self.quality_level,
+            "quality_flags": self.quality_flags,
+            "status": self.status,
+        }

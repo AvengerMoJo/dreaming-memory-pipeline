@@ -2,7 +2,8 @@
 Dreaming Synthesizer - B→C Conversion
 
 Clusters semantic chunks (B) into synthesized knowledge (C) using LLM.
-Creates topic clusters, relationship maps, and timelines.
+Creates topic clusters, relationship maps, timelines, and actionable clusters
+(DECISION, OUTCOME, FINDING, TOOL, INCOMPLETE) for retrieval.
 """
 
 import json
@@ -14,44 +15,54 @@ from dreaming.models import BChunk, CCluster, ClusterType
 
 
 # Synthesis prompt for clustering B chunks into C clusters
-SYNTHESIS_PROMPT = """You are a knowledge synthesis expert. Analyze the following semantic chunks and cluster them into meaningful topics and relationships.
+SYNTHESIS_PROMPT = """You are a knowledge synthesis expert. Analyze the following semantic chunks and cluster them into meaningful, actionable knowledge.
 
 CHUNKS:
 {chunks_json}
 
 INSTRUCTIONS:
-1. Identify natural clusters:
+1. Decompose the content into actionable clusters. Aim for at least 5 clusters.
+   Use these cluster types:
+   - DECISION: Explicit decisions made (e.g., "chose Docker path over bash_exec", "selected gemma-4-3b for inference")
+   - OUTCOME: Concrete results (e.g., "briefing saved to ~/.memory/scout_briefing_2026-04-06.md", "health endpoint tested and verified")
+   - FINDING: Discovered facts (e.g., "Rowhammer GPU attacks give complete machine control", "cella should be exercised through tmux-backed terminal path")
+   - TOOL: Tool usage patterns and recommendations (e.g., "use playwright_browser_snapshot over screenshot for actionable interaction", "scheduler_add_task for async handoff")
    - TOPIC: Thematic groupings (e.g., "scheduler architecture", "error handling")
    - RELATIONSHIP: Connected concepts across chunks
    - TIMELINE: Temporal or sequential patterns
-   - SUMMARY: High-level overviews
+   - SUMMARY: High-level overview of the entire conversation
+   - INCOMPLETE: Unresolved items that need follow-up (e.g., "need to verify D stage archival path", "pending investigation of entity extraction failure")
 
 2. For each cluster, provide:
-   - type: One of [TOPIC, RELATIONSHIP, TIMELINE, SUMMARY]
+   - type: One of [DECISION, OUTCOME, FINDING, TOOL, TOPIC, RELATIONSHIP, TIMELINE, SUMMARY, INCOMPLETE]
    - title: Concise cluster name
-   - summary: 1-2 sentence synthesis
-   - key_facts: Complete list of ALL specific facts, events, states, and attributes found in the cluster's chunks — one atomic statement per entry (e.g. "Alice moved to Paris in 2020", "Bob is married with two children", "The meeting happened on 3 June 2023"). Do NOT omit facts to keep the list short.
+   - summary: 1-2 sentence synthesis of the cluster content
+   - key_facts: Complete list of ALL specific facts, events, states, and attributes found in the cluster's chunks — one atomic statement per entry. Do NOT omit facts.
    - chunk_ids: List of chunk IDs in this cluster
-   - entities: Key entities/concepts
+   - entities: Key entities/concepts mentioned
    - insights: Novel connections or patterns discovered
+   - related_clusters: IDs of clusters that relate to this one
+   - confidence: "high", "medium", or "low" — how confident you are in this cluster's accuracy
 
 3. Cross-reference clusters when concepts relate
+4. Ensure each cluster is actionable and retrievable — avoid generic meta-descriptions like "A user query about..."
 
 OUTPUT FORMAT (JSON):
-{{
+{
   "clusters": [
-    {{
-      "type": "TOPIC",
+    {
+      "type": "DECISION",
       "title": "<cluster name>",
       "summary": "<synthesis of cluster content>",
       "key_facts": ["<specific factual statement>", "<another fact>"],
       "chunk_ids": ["b_xxx_0", "b_xxx_2"],
       "entities": ["<entity1>", "<entity2>"],
       "insights": ["<insight1>", "<insight2>"],
-      "related_clusters": []
-    }}
+      "related_clusters": [],
+      "confidence": "high"
+    }
   ]
-}}
+}
 
 Return ONLY valid JSON, no additional text."""
 
@@ -93,7 +104,8 @@ class DreamingSynthesizer:
                     "content": chunk.content[:200],
                     "labels": chunk.labels,
                     "speaker": chunk.speaker,
-                    "entities": chunk.entities
+                    "entities": chunk.entities,
+                    "key_facts": getattr(chunk, 'key_facts', chunk.__dict__.get('key_facts', []))
                 })
 
             chunks_json = json.dumps(chunks_data, indent=2, ensure_ascii=False)
@@ -216,37 +228,31 @@ class DreamingSynthesizer:
                 return {"clusters": results.get("clusters", [])}
             if isinstance(payload.get("items"), list):
                 return {"clusters": payload.get("items", [])}
-            return None
-
-        if isinstance(payload, list):
+            if isinstance(payload.get("output"), dict) and isinstance(payload.get("output").get("clusters"), list):
+                return {"clusters": payload.get("output").get("clusters", [])}
+        elif isinstance(payload, list):
             return {"clusters": payload}
-
         return None
 
-    def _repair_json_with_llm(self, raw_text: str) -> Optional[Dict[str, Any]]:
-        repair_prompt = (
-            "Convert the following content into STRICT valid JSON with this schema only:\n"
-            '{"clusters":[{"type":"TOPIC","title":"<string>","summary":"<string>","chunk_ids":["<string>"],"entities":["<string>"],"insights":["<string>"],"related_clusters":["<string>"]}]}\n'
-            "Return JSON only. No prose, no markdown.\n\n"
-            f"CONTENT:\n{raw_text}"
-        )
-        try:
-            repaired_response = self.llm.generate_response(query=repair_prompt, context=None)
-            repaired_clean = repaired_response.strip()
-            if repaired_clean.startswith("```json"):
-                repaired_clean = repaired_clean[7:]
-            if repaired_clean.startswith("```"):
-                repaired_clean = repaired_clean[3:]
-            if repaired_clean.endswith("```"):
-                repaired_clean = repaired_clean[:-3]
-            repaired_clean = repaired_clean.strip()
+    def _repair_json_with_llm(self, text: str) -> Optional[Dict[str, Any]]:
+        self._log("Attempting JSON repair via LLM", "info")
+        repair_prompt = f"""The following text contains JSON data but is malformed. Extract the JSON data and return it as a clean JSON object with a 'clusters' key containing a list of cluster objects.
 
-            parsed = json.loads(repaired_clean)
+TEXT:
+{text}
+
+Return ONLY valid JSON:
+{{
+  "clusters": [...]
+}}"""
+        try:
+            response = self.llm.generate_response(query=repair_prompt, context=None)
+            parsed = json.loads(response.strip())
             normalized = self._normalize_cluster_payload(parsed)
             if normalized is not None:
                 return normalized
-        except Exception as e:
-            self._log(f"LLM repair failed: {e}", "error")
+        except Exception:
+            pass
         return None
 
     def _create_c_clusters(
@@ -277,6 +283,7 @@ class DreamingSynthesizer:
                 related_clusters=cluster_data.get("related_clusters", []),
                 theme=cluster_data.get("title", f"Cluster {i}"),
                 confidence=0.9 if self.quality_level == "good" else 0.7,
+                confidence_level=cluster_data.get("confidence", "medium"),
                 created_at=datetime.now()
             )
 
@@ -343,32 +350,33 @@ class DreamingSynthesizer:
                 if isinstance(key_facts, list):
                     all_key_facts.extend(key_facts)
 
-            # Create a more meaningful content summary
-            content = f"Topic: {label}"
-            if all_entities:
-                content += f" | Entities: {', '.join(list(all_entities)[:5])}"
+            # Determine cluster type
+            if i == 0 and len(label_groups) > 1:
+                cluster_type = ClusterType.SUMMARY  # First cluster is overview
+            elif len(grouped_chunks) == 1:
+                cluster_type = ClusterType.FINDING  # Single chunk is a finding
+            else:
+                cluster_type = ClusterType.TOPIC
 
             c_cluster = CCluster(
                 id=cluster_id,
-                cluster_type=ClusterType.TOPIC,
-                content=content,
+                cluster_type=cluster_type,
+                content=f"Cluster of {len(grouped_chunks)} chunks labeled '{label}'",
                 related_chunks=[c.id for c in grouped_chunks],
-                theme=f"Topic: {label}",
-                confidence=0.7,
+                related_clusters=[],
+                theme=label,
+                confidence=0.5,
+                confidence_level="low",
                 created_at=datetime.now()
             )
 
             if hasattr(c_cluster, '__dict__'):
-                c_cluster.__dict__['quality_level'] = "basic"
+                c_cluster.__dict__['quality_level'] = self.quality_level
                 c_cluster.__dict__['needs_upgrade'] = True
-                c_cluster.__dict__['llm_used'] = "fallback"
-                c_cluster.__dict__['used_fallback'] = True
-                c_cluster.__dict__['fallback_reason'] = "llm_synthesis_parse_or_generation_failed"
-                c_cluster.__dict__['llm_provider'] = llm_info.get("provider", "unknown")
-                c_cluster.__dict__['model'] = llm_info.get("model", "unknown")
-                c_cluster.__dict__['entities'] = list(all_entities)
-                c_cluster.__dict__['key_facts'] = all_key_facts[:10]
+                c_cluster.__dict__['llm_used'] = llm_info.get("model")
+                c_cluster.__dict__['key_facts'] = all_key_facts
 
             c_clusters.append(c_cluster)
 
+        self._log(f"Created {len(c_clusters)} fallback C clusters")
         return c_clusters
