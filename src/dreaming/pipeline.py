@@ -218,6 +218,32 @@ class DreamingPipeline:
             except Exception as e:
                 self._log(f"Knowledge unit extraction failed (non-fatal): {e}", "warning")
 
+            # Quality threshold checks
+            total_entities = sum(len(c.entities) for c in b_chunks)
+            if total_entities < 5:
+                self._log(f"Entity threshold incomplete: {total_entities} entities (<5), archiving with flag", "warning")
+                metadata.setdefault("quality_flags", []).append("low_entity_count")
+            else:
+                self._log(f"Entity threshold met: {total_entities} entities")
+
+            cluster_types = set(c.cluster_type.value for c in c_clusters)
+            actionable_types = {"decision", "outcome", "finding", "tool", "incomplete"}
+            actionable_count = len(cluster_types & actionable_types)
+            if len(c_clusters) < 5:
+                self._log(f"Cluster threshold incomplete: {len(c_clusters)} clusters (<5), archiving with flag", "warning")
+                metadata.setdefault("quality_flags", []).append("low_cluster_count")
+            if actionable_count == 0:
+                self._log(f"Synthesis incomplete: 0 actionable clusters, archiving with flag", "warning")
+                metadata.setdefault("quality_flags", []).append("no_actionable_clusters")
+            else:
+                self._log(f"Synthesis quality: {len(c_clusters)} clusters, {actionable_count} actionable")
+
+            if len(knowledge_units) == 0:
+                self._log(f"Knowledge unit threshold incomplete: 0 units, archiving with flag", "warning")
+                metadata.setdefault("quality_flags", []).append("no_knowledge_units")
+            else:
+                self._log(f"Knowledge units met: {len(knowledge_units)} units")
+
             archive_data = self._create_archive_data(
                 conversation_id=conversation_id,
                 version=next_version,

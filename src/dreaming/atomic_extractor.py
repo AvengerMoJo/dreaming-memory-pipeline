@@ -124,14 +124,13 @@ class AtomicFactExtractor:
         for i, item in enumerate(raw):
             unit = KnowledgeUnit(
                 id=f"ku_{doc_id}_{i}",
-                doc_id=doc_id,
-                core_meaning=item.get("core_meaning", ""),
+                source_doc_id=doc_id,
+                content=item.get("core_meaning", item.get("content", "")),
                 quote=item.get("quote", ""),
                 labels=item.get("labels", []),
                 entities=item.get("entities", []),
                 links=[],
                 confidence=0.9 if self.quality_level == "good" else 0.7,
-                position=i / total if total else 0.0,
                 created_at=datetime.now(),
             )
             units.append(unit)
@@ -147,14 +146,13 @@ class AtomicFactExtractor:
             first_sentence = para.split(".")[0].strip() + "." if "." in para else para[:120]
             unit = KnowledgeUnit(
                 id=f"ku_{doc_id}_{i}_fallback",
-                doc_id=doc_id,
-                core_meaning=first_sentence,
+                source_doc_id=doc_id,
+                content=first_sentence,
                 quote=para[:400],
                 labels=[],
                 entities=[],
                 links=[],
                 confidence=0.4,
-                position=i / total if total else 0.0,
                 created_at=datetime.now(),
             )
             units.append(unit)
