@@ -93,8 +93,14 @@ class MemoryService:
             embedding=self.embedding, data_dir=os.path.join(data_dir, "archival")
         )
 
+        storage_cfg = self.config.get("storage", {}) if isinstance(self.config, dict) else {}
+        storage_backend_name = storage_cfg.get("backend", "local_fs")
+        storage_backend_config = storage_cfg.get("backend_config", {})
         self.knowledge_manager = KnowledgeManager(
-            embedding=self.embedding, data_dir=os.path.join(data_dir, "knowledge")
+            embedding=self.embedding,
+            data_dir=os.path.join(data_dir, "knowledge"),
+            storage_backend_name=storage_backend_name,
+            storage_backend_config=storage_backend_config,
         )
 
         # Track the current conversation

@@ -8,12 +8,14 @@ import importlib
 from typing import Any, Callable, Dict
 
 from mojo_memory.storage.base import StorageBackend
+from mojo_memory.storage.duckdb_backend import DuckDBStorageBackend
 from mojo_memory.storage.local_fs_backend import LocalFileStorageBackend
 
 BackendFactory = Callable[..., StorageBackend]
 
 _REGISTRY: Dict[str, BackendFactory] = {
     "local_fs": LocalFileStorageBackend,
+    "duckdb": DuckDBStorageBackend,
 }
 
 

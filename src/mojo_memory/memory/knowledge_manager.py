@@ -1,17 +1,26 @@
 from typing import Dict, List, Any, Tuple
-import os
-import json
 import datetime
 import uuid
 import math
 import re
+from typing import Optional
+
+from mojo_memory.storage import StorageBackend, create_storage_backend
 
 class KnowledgeManager:
     """
     Document and knowledge management without LlamaIndex dependency
     Simple vector storage for documents with semantic search
     """
-    def __init__(self, embedding, collection_name: str = "knowledge", data_dir: str = ".knowledge"):
+    def __init__(
+        self,
+        embedding,
+        collection_name: str = "knowledge",
+        data_dir: str = ".knowledge",
+        storage_backend: Optional[StorageBackend] = None,
+        storage_backend_name: str = "local_fs",
+        storage_backend_config: Optional[Dict[str, Any]] = None,
+    ):
         # Initialize with default settings
         self.embedding = embedding
         self.collection_name = collection_name
@@ -21,31 +30,33 @@ class KnowledgeManager:
         self.documents: List[Dict[str, Any]] = []  # Stores document text and metadata
         self.chunk_embeddings: List[Dict[str, Any]] = []  # Stores embeddings for document chunks
         
-        # Create data directory if it doesn't exist
-        os.makedirs(self.data_dir, exist_ok=True)
+        if storage_backend is not None:
+            self.storage_backend = storage_backend
+        else:
+            backend_config = dict(storage_backend_config or {})
+            if storage_backend_name == "local_fs":
+                backend_config.setdefault("base_path", self.data_dir)
+            self.storage_backend = create_storage_backend(storage_backend_name, **backend_config)
         
         # Load existing data if available
         self._load_data()
     
     def _load_data(self) -> None:
         """Load existing knowledge data"""
-        knowledge_file = os.path.join(self.data_dir, f"{self.collection_name}.json")
-        
-        if os.path.exists(knowledge_file):
-            try:
-                with open(knowledge_file, 'r') as f:
-                    data = json.load(f)
-                    self.documents = data.get("documents", [])
-                    self.chunk_embeddings = data.get("embeddings", [])
-                print(f"📚 [KnowledgeManager] Loaded {len(self.documents)} documents from {knowledge_file}")
-            except Exception as e:
-                print(f"Error loading knowledge base: {e}")
-                self.documents = []
-                self.chunk_embeddings = []
+        key = f"{self.collection_name}.json"
+        try:
+            data = self.storage_backend.read_json(key) or {}
+            self.documents = data.get("documents", []) if isinstance(data, dict) else []
+            self.chunk_embeddings = data.get("embeddings", []) if isinstance(data, dict) else []
+            print(f"📚 [KnowledgeManager] Loaded {len(self.documents)} documents from {key}")
+        except Exception as e:
+            print(f"Error loading knowledge base: {e}")
+            self.documents = []
+            self.chunk_embeddings = []
     
     def _save_data(self) -> None:
         """Save knowledge data to disk"""
-        knowledge_file = os.path.join(self.data_dir, f"{self.collection_name}.json")
+        key = f"{self.collection_name}.json"
 
         try:
             data = {
@@ -53,19 +64,11 @@ class KnowledgeManager:
                 "embeddings": self.chunk_embeddings,
                 "updated_at": datetime.datetime.now().isoformat()
             }
-
-            # Write to temp file first, then rename (atomic operation)
-            temp_file = knowledge_file + ".tmp"
-            with open(temp_file, 'w') as f:
-                json.dump(data, f, indent=2)
-
-            # Atomic rename
-            os.replace(temp_file, knowledge_file)
-
-            print(f"✅ Saved {len(self.documents)} documents to {knowledge_file}")
+            self.storage_backend.write_json(key, data)
+            print(f"✅ Saved {len(self.documents)} documents to {key}")
 
         except Exception as e:
-            print(f"❌ Error saving knowledge base to {knowledge_file}: {e}")
+            print(f"❌ Error saving knowledge base to {key}: {e}")
             import traceback
             traceback.print_exc()
             raise  # Re-raise so we know save failed
