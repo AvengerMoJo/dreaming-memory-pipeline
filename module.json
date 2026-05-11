@@ -10,7 +10,9 @@
       "capabilities": {
         "supports_embeddings": true,
         "supports_archive": true,
-        "supports_conversation_search": true
+        "supports_conversation_search": true,
+        "retrieval_strategies": ["semantic", "hybrid"],
+        "default_retrieval_strategy": "hybrid"
       },
       "dependencies": [],
       "data_contracts": {

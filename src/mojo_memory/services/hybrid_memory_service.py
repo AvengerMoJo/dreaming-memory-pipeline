@@ -54,6 +54,18 @@ class HybridMemoryService(MemoryService):
         self.embedding_models: Dict[str, SimpleEmbedding] = {}
         self._role_storages: Dict[str, MultiModelEmbeddingStorage] = {}
 
+        # Retrieval strategy — resolved from config key "retrieval.strategy"
+        strategy_name = "hybrid"
+        if config and hasattr(config, "retrieval"):
+            strategy_name = getattr(config.retrieval, "strategy", "hybrid")
+        elif isinstance(config, dict):
+            strategy_name = config.get("retrieval", {}).get("strategy", "hybrid")
+        try:
+            from mojo_memory.retrieval.registry import get_strategy
+            self._retrieval_strategy = get_strategy(strategy_name) or get_strategy("hybrid")
+        except Exception:
+            self._retrieval_strategy = None
+
         if self.multi_model_enabled:
             self._setup_multi_model()
 
@@ -303,56 +315,78 @@ class HybridMemoryService(MemoryService):
     def _get_multi_model_context(
         self, query: str, max_items: int = 10
     ) -> List[Dict[str, Any]]:
-        """Get context using multi-model system with fallback"""
-        all_results: List[Any] = []
+        """Get context using the configured retrieval strategy with multi-model fallback."""
+        if not self.multi_model_storage:
+            return super().get_context_for_query(query, max_items)
 
-        # Try models in priority order
+        # Pick the primary embedding model for query vectorisation
         model_priority = ["bge-m3:1024", "gemma:768", "gemma:256"]
-
+        query_embedding = None
         for model_key in model_priority:
+            if model_key in self.embedding_models:
+                try:
+                    query_embedding = self.embedding_models[model_key].get_text_embedding(query)
+                    if query_embedding:
+                        break
+                except Exception:
+                    continue
+
+        if query_embedding is None:
+            return super().get_context_for_query(query, max_items)
+
+        # Collect raw candidates from storage (attach source tag)
+        candidates: List[Dict[str, Any]] = []
+        for c in self.multi_model_storage.conversations:
+            candidates.append({**c, "source": "conversation"})
+        for d in self.multi_model_storage.documents:
+            candidates.append({**d, "source": "knowledge_base"})
+
+        # Delegate scoring to the pluggable strategy
+        if self._retrieval_strategy is not None:
+            scored = self._retrieval_strategy.search(
+                query_embedding, candidates, max_results=max_items
+            )
+            return [
+                {
+                    "content": r.content,
+                    "source": r.source,
+                    "relevance_score": r.score,
+                    "metadata": r.metadata,
+                }
+                for r in scored
+            ]
+
+        # Fallback: legacy hardcoded path (try models in priority order)
+        model_priority_list = ["bge-m3:1024", "gemma:768", "gemma:256"]
+        for model_key in model_priority_list:
             if model_key not in self.embedding_models:
                 continue
 
             try:
-                # Generate query embedding
                 embedding_service = self.embedding_models[model_key]
-                query_embedding = embedding_service.get_text_embedding(query)
+                qe = embedding_service.get_text_embedding(query)
 
-                # Search conversations
-                conv_results: List[Any] = []
-                if self.multi_model_storage:
-                    conv_results = self.multi_model_storage.search_conversations(
-                        query_embedding, model_key, max_results=max_items
-                    )
+                conv_results = self.multi_model_storage.search_conversations(
+                    qe, model_key, max_results=max_items
+                )
+                doc_results = self.multi_model_storage.search_documents(
+                    qe, model_key, max_results=max_items
+                )
 
-                # Search documents
-                doc_results: List[Any] = []
-                if self.multi_model_storage:
-                    doc_results = self.multi_model_storage.search_documents(
-                        query_embedding, model_key, max_results=max_items
-                    )
-
-                # Combine and format results
                 combined = conv_results + doc_results
                 if combined:
-                    # Convert to expected format
-                    formatted_results = []
-                    for result in combined:
-                        formatted_results.append(
-                            {
-                                "content": result["text_content"],
-                                "source": result["source"],
-                                "relevance_score": result["similarity_score"],
-                                "model_used": result["model_used"],
-                                "metadata": result.get("user_metadata", {}),
-                            }
-                        )
-
-                    # Sort by relevance and limit
-                    formatted_results.sort(
-                        key=lambda x: x["relevance_score"], reverse=True
-                    )
-                    return formatted_results[:max_items]
+                    formatted = [
+                        {
+                            "content": r["text_content"],
+                            "source": r["source"],
+                            "relevance_score": r["similarity_score"],
+                            "model_used": r["model_used"],
+                            "metadata": r.get("user_metadata", {}),
+                        }
+                        for r in combined
+                    ]
+                    formatted.sort(key=lambda x: x["relevance_score"], reverse=True)
+                    return formatted[:max_items]
 
             except Exception as e:
                 self.logger.warning(f"Search with {model_key} failed: {e}")
