@@ -1,0 +1,17 @@
+{
+  "name": "mojo_memory",
+  "version": "1.0.0",
+  "contract_version": "1.0",
+  "provider_type": "memory",
+  "entry_point": "mojo_memory.services.memory_provider.MemoryProviderAdapter",
+  "description": "Memory provider — conversation CRUD/search, knowledge units, archival",
+  "capabilities": {
+    "supports_embeddings": true,
+    "supports_archive": true,
+    "supports_conversation_search": true
+  },
+  "dependencies": [],
+  "data_contracts": {
+    "ConversationStore": "1.0"
+  }
+}
