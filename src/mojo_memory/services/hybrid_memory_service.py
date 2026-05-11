@@ -6,6 +6,7 @@ Avoids conflicts by using same codebase with optional multi-model features
 import os
 import asyncio
 import time
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, List, Any, Optional
 from mojo_memory.services.memory_service import MemoryService
@@ -53,6 +54,9 @@ class HybridMemoryService(MemoryService):
         self.multi_model_storage = None
         self.embedding_models: Dict[str, SimpleEmbedding] = {}
         self._role_storages: Dict[str, MultiModelEmbeddingStorage] = {}
+        self._pending_pair_id: Optional[str] = None
+        self._pending_user_message_id: Optional[str] = None
+        self._conversation_id: str = "default"
 
         # Retrieval strategy — resolved from config key "retrieval.strategy"
         strategy_name = "hybrid"
@@ -165,7 +169,12 @@ class HybridMemoryService(MemoryService):
                     content=message,
                     message_type="user",
                     embedding_models=self.embedding_models,
+                    conversation_id=self._conversation_id,
+                    pair_id=str(uuid.uuid4()),
+                    status="incomplete",
                 )
+                self._pending_user_message_id = msg_id
+                self._pending_pair_id = self.multi_model_storage.conversations[-1].get("pair_id")
                 self.logger.debug(f"Stored user message with multi-model: {msg_id}")
             except Exception as e:
                 self.logger.warning(
@@ -188,7 +197,13 @@ class HybridMemoryService(MemoryService):
                     content=message,
                     message_type="assistant",
                     embedding_models=self.embedding_models,
+                    conversation_id=self._conversation_id,
+                    parent_message_id=self._pending_user_message_id,
+                    pair_id=self._pending_pair_id,
+                    status="complete",
                 )
+                self._pending_pair_id = None
+                self._pending_user_message_id = None
                 self.logger.debug(
                     f"Stored assistant message with multi-model: {msg_id}"
                 )

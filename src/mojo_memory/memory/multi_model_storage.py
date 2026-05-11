@@ -5,7 +5,12 @@ Stores text + embeddings from multiple models with dynamic retrieval
 from typing import Dict, List, Any, Optional, Tuple
 from datetime import datetime
 from app.config.paths import get_memory_path
-from mojo_memory.storage import StorageBackend, create_storage_backend
+from mojo_memory.storage import (
+    ConversationRecord,
+    StorageBackend,
+    create_storage_backend,
+    validate_conversation_record,
+)
 
 class MultiModelEmbeddingStorage:
     """Stores text with embeddings from multiple models"""
@@ -53,7 +58,11 @@ class MultiModelEmbeddingStorage:
         self.storage_backend.write_json(key, data)
     
     def store_conversation_message(self, content: str, message_type: str, 
-                                 embedding_models: Dict[str, Any]) -> str:
+                                 embedding_models: Dict[str, Any],
+                                 conversation_id: str = "default",
+                                 parent_message_id: Optional[str] = None,
+                                 pair_id: Optional[str] = None,
+                                 status: str = "complete") -> str:
         """
         Store conversation message with text + multiple embeddings
         
@@ -66,6 +75,8 @@ class MultiModelEmbeddingStorage:
             message_id: Unique ID for this message
         """
         message_id = f"msg_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{len(self.conversations)}"
+        existing_turns = [m for m in self.conversations if m.get("conversation_id", "default") == conversation_id]
+        turn_index = len(existing_turns)
         
         # Generate embeddings from all available models
         embeddings = {}
@@ -81,13 +92,29 @@ class MultiModelEmbeddingStorage:
                 print(f"❌ Failed to generate embedding for {model_key}: {e}")
         
         # Store message with all embeddings
+        created_at = datetime.now().isoformat()
+        record = ConversationRecord(
+            conversation_id=conversation_id,
+            message_id=message_id,
+            turn_index=turn_index,
+            role=message_type,
+            content=content,
+            created_at=created_at,
+            parent_message_id=parent_message_id,
+            pair_id=pair_id,
+            status=status,
+        ).to_dict()
+        valid, reason = validate_conversation_record(record)
+        if not valid:
+            raise ValueError(f"invalid conversation record: {reason}")
+
         message_entry = {
-            "message_id": message_id,
-            "text_content": content,  # Always preserve original text
-            "message_type": message_type,
+            **record,
+            "text_content": content,  # backward compatibility
+            "message_type": message_type,  # backward compatibility
             "embeddings": embeddings,
             "metadata": {
-                "created_at": datetime.now().isoformat(),
+                "created_at": created_at,
                 "model_versions": model_versions,
                 "available_models": list(embeddings.keys())
             }
@@ -166,7 +193,7 @@ class MultiModelEmbeddingStorage:
                 })
         
         # Sort by similarity score
-        results.sort(key=lambda x: x["similarity_score"], reverse=True)
+        results.sort(key=lambda x: (x["similarity_score"], -int(next((m.get("turn_index", 0) for m in self.conversations if m.get("message_id")==x["message_id"]), 0))), reverse=True)
         return results[:max_results]
     
     def search_documents(self, query_embedding: List[float], model_key: str,
