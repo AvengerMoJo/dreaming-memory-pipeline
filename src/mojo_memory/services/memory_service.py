@@ -37,7 +37,7 @@ class MemoryService:
     def __init__(
         self,
         data_dir: str | None = None,
-        embedding_model: str = "nomic-ai/nomic-embed-text-v2-moe",
+        embedding_model: str = "BAAI/bge-m3",
         embedding_backend: str = "huggingface",
         embedding_device: str | None = None,
         config: Dict[str, Any] | None = None,

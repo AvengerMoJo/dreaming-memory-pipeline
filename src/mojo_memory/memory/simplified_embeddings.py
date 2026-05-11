@@ -38,7 +38,7 @@ class SimpleEmbedding:
     
     def __init__(self, 
                  backend: str = "huggingface", 
-                 model_name: str = "nomic-ai/nomic-embed-text-v2-moe",
+                 model_name: str = "BAAI/bge-m3",
                   api_key: str | None = None,
                   server_url: str = "http://localhost:8080/embed",
                   embedding_dim: int = 768,

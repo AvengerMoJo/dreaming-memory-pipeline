@@ -28,7 +28,7 @@ class MemoryProviderAdapter(MemoryProvider):
     def __init__(
         self,
         data_dir: Optional[str] = None,
-        embedding_model: str = "nomic-ai/nomic-embed-text-v2-moe",
+        embedding_model: str = "BAAI/bge-m3",
         embedding_backend: str = "huggingface",
         embedding_device: Optional[str] = None,
         config: Optional[Dict[str, Any]] = None,
