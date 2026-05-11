@@ -2,21 +2,33 @@
 Multi-Model Embedding Storage System
 Stores text + embeddings from multiple models with dynamic retrieval
 """
-import json
-import os
 from typing import Dict, List, Any, Optional, Tuple
 from datetime import datetime
 from app.config.paths import get_memory_path
+from mojo_memory.storage import StorageBackend, create_storage_backend
 
 class MultiModelEmbeddingStorage:
     """Stores text with embeddings from multiple models"""
 
-    def __init__(self, data_dir: Optional[str] = None):
+    def __init__(
+        self,
+        data_dir: Optional[str] = None,
+        storage_backend: Optional[StorageBackend] = None,
+        storage_backend_name: str = "local_fs",
+        storage_backend_config: Optional[Dict[str, Any]] = None,
+    ):
         if data_dir is None:
             data_dir = get_memory_path()
         self.data_dir = data_dir
-        self.conversations_file = os.path.join(data_dir, "conversations_multi_model.json")
-        self.documents_file = os.path.join(data_dir, "knowledge_multi_model.json")
+        self.conversations_file = "conversations_multi_model.json"
+        self.documents_file = "knowledge_multi_model.json"
+        if storage_backend is not None:
+            self.storage_backend = storage_backend
+        else:
+            backend_config = dict(storage_backend_config or {})
+            if storage_backend_name == "local_fs":
+                backend_config.setdefault("base_path", data_dir)
+            self.storage_backend = create_storage_backend(storage_backend_name, **backend_config)
 
         # Load existing data
         self.conversations = self._load_data(self.conversations_file)
@@ -26,21 +38,19 @@ class MultiModelEmbeddingStorage:
         print(f"📚 [MultiModelStorage] Loaded {len(self.documents)} documents from knowledge base")
         print(f"💬 [MultiModelStorage] Loaded {len(self.conversations)} conversation messages")
     
-    def _load_data(self, file_path: str) -> List[Dict[str, Any]]:
-        """Load data from JSON file"""
-        if os.path.exists(file_path):
-            try:
-                with open(file_path, 'r', encoding='utf-8') as f:
-                    return json.load(f)
-            except Exception as e:
-                print(f"Error loading {file_path}: {e}")
+    def _load_data(self, key: str) -> List[Dict[str, Any]]:
+        """Load list data from backend key."""
+        try:
+            data = self.storage_backend.read_json(key)
+            if isinstance(data, list):
+                return data
+        except Exception as e:
+            print(f"Error loading {key}: {e}")
         return []
     
-    def _save_data(self, data: List[Dict[str, Any]], file_path: str):
-        """Save data to JSON file"""
-        os.makedirs(os.path.dirname(file_path), exist_ok=True)
-        with open(file_path, 'w', encoding='utf-8') as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+    def _save_data(self, data: List[Dict[str, Any]], key: str):
+        """Save list data to backend key."""
+        self.storage_backend.write_json(key, data)
     
     def store_conversation_message(self, content: str, message_type: str, 
                                  embedding_models: Dict[str, Any]) -> str:

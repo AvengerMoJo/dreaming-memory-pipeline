@@ -74,8 +74,15 @@ class HybridMemoryService(MemoryService):
         try:
             self.logger.info("Setting up multi-model embedding system...")
 
-            # Initialize multi-model storage
-            self.multi_model_storage = MultiModelEmbeddingStorage(self.data_dir)
+            # Initialize multi-model storage with pluggable backend.
+            storage_cfg = self.config.get("storage", {}) if isinstance(self.config, dict) else {}
+            backend_name = storage_cfg.get("backend", "local_fs")
+            backend_config = storage_cfg.get("backend_config", {})
+            self.multi_model_storage = MultiModelEmbeddingStorage(
+                data_dir=self.data_dir,
+                storage_backend_name=backend_name,
+                storage_backend_config=backend_config,
+            )
 
             # Setup embedding models from config
             embedding_config = self.config.get("embedding_models", {})
