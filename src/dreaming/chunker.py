@@ -36,9 +36,9 @@ IMPORTANT:
 - Extract key_facts even if the chunk is short — every factual statement counts
 
 OUTPUT FORMAT (JSON):
-{
+{{
   "chunks": [
-    {
+    {{
       "content": "<original text, unchanged>",
       "language": "<detected language code>",
       "labels": ["<tag1>", "<tag2>"],
@@ -46,9 +46,9 @@ OUTPUT FORMAT (JSON):
       "entities": ["<entity1>", "<entity2>"],
       "summary": "<one-sentence summary>",
       "key_facts": ["<specific factual statement>", "<another fact>"]
-    }
+    }}
   ]
-}
+}}
 
 Return ONLY valid JSON, no additional text."""
 
@@ -98,28 +98,18 @@ class ConversationChunker:
         """
         self._log(f"Chunking conversation {conversation_id} ({len(conversation_text)} chars)")
 
-        try:
-            prompt = CHUNKING_PROMPT.format(conversation_text=conversation_text)
-            response = self.llm.generate_response(query=prompt, context=None)
-            chunks_data = self._parse_llm_response(response)
+        prompt = CHUNKING_PROMPT.format(conversation_text=conversation_text)
+        response = self.llm.generate_response(query=prompt, context=None)
+        chunks_data = self._parse_llm_response(response)
 
-            b_chunks = self._create_b_chunks(
-                parent_id=conversation_id,
-                chunks_data=chunks_data,
-                original_text=conversation_text
-            )
+        b_chunks = self._create_b_chunks(
+            parent_id=conversation_id,
+            chunks_data=chunks_data,
+            original_text=conversation_text
+        )
 
-            self._log(f"Created {len(b_chunks)} B chunks")
-            return b_chunks
-
-        except Exception as e:
-            llm_info = self._get_llm_info()
-            self._log(
-                f"LLM chunking failed (provider={llm_info.get('provider')} model={llm_info.get('model')}), "
-                f"using rule-based fallback. error={e}",
-                "warning"
-            )
-            return self._fallback_chunking(conversation_id, conversation_text)
+        self._log(f"Created {len(b_chunks)} B chunks")
+        return b_chunks
 
     def _parse_llm_response(self, response: str) -> Dict[str, Any]:
         """Parse LLM JSON response with multi-pass fallbacks"""
@@ -338,58 +328,6 @@ Return ONLY valid JSON:
         except Exception:
             pass
         return {"provider": "unknown", "model": "unknown"}
-
-    def _fallback_chunking(
-        self,
-        parent_id: str,
-        text: str
-    ) -> List[BChunk]:
-        """Simple rule-based chunking fallback if LLM fails"""
-        self._log("Using rule-based fallback chunking", "warning")
-        llm_info = self._get_llm_info()
-
-        paragraphs = [p.strip() for p in text.split('\n\n') if p.strip()]
-        if not paragraphs:
-            paragraphs = [text]
-
-        b_chunks = []
-        for i, para in enumerate(paragraphs):
-            chunk_id = f"b_{parent_id}_{i}_fallback"
-
-            speaker = "unknown"
-            if para.lower().startswith(("user:", "human:")):
-                speaker = "user"
-            elif para.lower().startswith(("assistant:", "ai:")):
-                speaker = "assistant"
-
-            # Extract entities from the text using simple patterns
-            entities = self._extract_entities_from_text(para)
-
-            b_chunk = BChunk(
-                id=chunk_id,
-                parent_id=parent_id,
-                chunk_type=ChunkType.SEMANTIC,
-                content=para,
-                labels=[],
-                speaker=speaker,
-                entities=entities,
-                key_facts=[],
-                confidence=0.5,
-                token_range=(i * 100, (i + 1) * 100),
-                position_in_parent=i / len(paragraphs) if paragraphs else 0.0,
-                embedding=None,
-                created_at=datetime.now()
-            )
-
-            b_chunk.quality_level = self.quality_level
-            b_chunk.needs_upgrade = True
-            b_chunk.llm_used = llm_info.get("model")
-            b_chunk.language = "unknown"
-
-            b_chunks.append(b_chunk)
-
-        self._log(f"Created {len(b_chunks)} fallback B chunks")
-        return b_chunks
 
     def _extract_entities_from_text(self, text: str) -> List[str]:
         """Simple entity extraction from text using capitalized words and patterns"""

@@ -9,7 +9,6 @@ Creates topic clusters, relationship maps, timelines, and actionable clusters
 import json
 from typing import List, Dict, Any, Optional
 from datetime import datetime
-from collections import defaultdict
 
 from dreaming.models import BChunk, CCluster, ClusterType
 
@@ -48,9 +47,9 @@ INSTRUCTIONS:
 4. Ensure each cluster is actionable and retrievable — avoid generic meta-descriptions like "A user query about..."
 
 OUTPUT FORMAT (JSON):
-{
+{{
   "clusters": [
-    {
+    {{
       "type": "DECISION",
       "title": "<cluster name>",
       "summary": "<synthesis of cluster content>",
@@ -60,9 +59,9 @@ OUTPUT FORMAT (JSON):
       "insights": ["<insight1>", "<insight2>"],
       "related_clusters": [],
       "confidence": "high"
-    }
+    }}
   ]
-}
+}}
 
 Return ONLY valid JSON, no additional text."""
 
@@ -96,41 +95,31 @@ class DreamingSynthesizer:
             self._log("No chunks to synthesize", "warning")
             return []
 
-        try:
-            chunks_data = []
-            for chunk in chunks:
-                chunks_data.append({
-                    "id": chunk.id,
-                    "content": chunk.content[:200],
-                    "labels": chunk.labels,
-                    "speaker": chunk.speaker,
-                    "entities": chunk.entities,
-                    "key_facts": getattr(chunk, 'key_facts', chunk.__dict__.get('key_facts', []))
-                })
+        chunks_data = []
+        for chunk in chunks:
+            chunks_data.append({
+                "id": chunk.id,
+                "content": chunk.content[:200],
+                "labels": chunk.labels,
+                "speaker": chunk.speaker,
+                "entities": chunk.entities,
+                "key_facts": getattr(chunk, 'key_facts', chunk.__dict__.get('key_facts', []))
+            })
 
-            chunks_json = json.dumps(chunks_data, indent=2, ensure_ascii=False)
-            prompt = SYNTHESIS_PROMPT.format(chunks_json=chunks_json)
+        chunks_json = json.dumps(chunks_data, indent=2, ensure_ascii=False)
+        prompt = SYNTHESIS_PROMPT.format(chunks_json=chunks_json)
 
-            response = self.llm.generate_response(query=prompt, context=None)
-            clusters_data = self._parse_llm_response(response)
+        response = self.llm.generate_response(query=prompt, context=None)
+        clusters_data = self._parse_llm_response(response)
 
-            c_clusters = self._create_c_clusters(
-                session_id=session_id,
-                clusters_data=clusters_data,
-                source_chunks=chunks
-            )
+        c_clusters = self._create_c_clusters(
+            session_id=session_id,
+            clusters_data=clusters_data,
+            source_chunks=chunks
+        )
 
-            self._log(f"Created {len(c_clusters)} C clusters")
-            return c_clusters
-
-        except Exception as e:
-            llm_info = self._get_llm_info()
-            self._log(
-                f"LLM synthesis failed (provider={llm_info.get('provider')} model={llm_info.get('model')}), "
-                f"using rule-based fallback. error={e}",
-                "warning"
-            )
-            return self._fallback_clustering(chunks, session_id)
+        self._log(f"Created {len(c_clusters)} C clusters")
+        return c_clusters
 
     def _parse_llm_response(self, response: str) -> Dict[str, Any]:
         response_clean = response.strip()
@@ -308,75 +297,3 @@ Return ONLY valid JSON:
             pass
         return {"provider": "unknown", "model": "unknown"}
 
-    def _fallback_clustering(
-        self,
-        chunks: List[BChunk],
-        session_id: str
-    ) -> List[CCluster]:
-        """Improved rule-based fallback clustering"""
-        self._log("Using rule-based fallback clustering", "warning")
-        llm_info = self._get_llm_info()
-
-        # Group by labels if available
-        label_groups = defaultdict(list)
-        for chunk in chunks:
-            for label in chunk.labels:
-                label_groups[label].append(chunk)
-
-        # If no labels, group by speaker
-        if not label_groups:
-            speaker_groups = defaultdict(list)
-            for chunk in chunks:
-                speaker_groups[chunk.speaker].append(chunk)
-            label_groups = speaker_groups
-
-        # If still no groups, create one group per chunk (topic-boundary chunking)
-        if not label_groups:
-            label_groups = {f"segment_{i}": [chunk] for i, chunk in enumerate(chunks)}
-
-        c_clusters = []
-        for i, (label, grouped_chunks) in enumerate(label_groups.items()):
-            cluster_id = f"c_{session_id}_{i}_fallback"
-
-            # Extract entities from all chunks in this cluster
-            all_entities = set()
-            for chunk in grouped_chunks:
-                all_entities.update(chunk.entities)
-
-            # Extract key facts from chunks
-            all_key_facts = []
-            for chunk in grouped_chunks:
-                key_facts = getattr(chunk, 'key_facts', chunk.__dict__.get('key_facts', []))
-                if isinstance(key_facts, list):
-                    all_key_facts.extend(key_facts)
-
-            # Determine cluster type
-            if i == 0 and len(label_groups) > 1:
-                cluster_type = ClusterType.SUMMARY  # First cluster is overview
-            elif len(grouped_chunks) == 1:
-                cluster_type = ClusterType.FINDING  # Single chunk is a finding
-            else:
-                cluster_type = ClusterType.TOPIC
-
-            c_cluster = CCluster(
-                id=cluster_id,
-                cluster_type=cluster_type,
-                content=f"Cluster of {len(grouped_chunks)} chunks labeled '{label}'",
-                related_chunks=[c.id for c in grouped_chunks],
-                related_clusters=[],
-                theme=label,
-                confidence=0.5,
-                confidence_level="low",
-                created_at=datetime.now()
-            )
-
-            if hasattr(c_cluster, '__dict__'):
-                c_cluster.__dict__['quality_level'] = self.quality_level
-                c_cluster.__dict__['needs_upgrade'] = True
-                c_cluster.__dict__['llm_used'] = llm_info.get("model")
-                c_cluster.__dict__['key_facts'] = all_key_facts
-
-            c_clusters.append(c_cluster)
-
-        self._log(f"Created {len(c_clusters)} fallback C clusters")
-        return c_clusters
