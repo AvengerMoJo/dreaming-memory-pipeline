@@ -272,6 +272,8 @@ Return ONLY valid JSON:
         llm_info = self._get_llm_info()
 
         for i, chunk_data in enumerate(chunks):
+            if not isinstance(chunk_data, dict):
+                continue
             chunk_id = f"b_{parent_id}_{i}"
 
             token_start = i * 400

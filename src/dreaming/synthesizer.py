@@ -256,6 +256,8 @@ Return ONLY valid JSON:
         llm_info = self._get_llm_info()
 
         for i, cluster_data in enumerate(clusters):
+            if not isinstance(cluster_data, dict):
+                continue
             cluster_id = f"c_{session_id}_{i}"
 
             cluster_type_str = cluster_data.get("type", "TOPIC").upper()
