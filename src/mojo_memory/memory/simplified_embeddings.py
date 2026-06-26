@@ -36,6 +36,7 @@ class SimpleEmbedding:
         embedding_dim: int = 768,
         cache_dir: str = ".embedding_cache",
         device: str | None = None,
+        **backend_kwargs: Any,
     ):
         self.logger = get_logger(self.__class__.__name__)
         self.backend = backend
@@ -65,6 +66,7 @@ class SimpleEmbedding:
             server_url=server_url,
             api_key=api_key,
             device=device,
+            **backend_kwargs,
         )
         self._sync_from_backend_info()
 

@@ -31,13 +31,15 @@ class HybridMemoryService(MemoryService):
         embedding_backend: str = "huggingface",
         embedding_device: Optional[str] = None,
         config: Any = None,
+        **embedding_kwargs: Any,
     ):
         if data_dir is None:
             data_dir = get_memory_path()
         # Normalize config: convert AppConfig object to dict if needed
         config_dict = config.to_dict() if hasattr(config, "to_dict") else config
         super().__init__(
-            data_dir, embedding_model, embedding_backend, embedding_device, config_dict
+            data_dir, embedding_model, embedding_backend, embedding_device, config_dict,
+            **embedding_kwargs,
         )
 
         # Set multi_model_enabled from config with fallback
