@@ -41,6 +41,7 @@ class MemoryService:
         embedding_backend: str = "huggingface",
         embedding_device: str | None = None,
         config: Dict[str, Any] | None = None,
+        **embedding_kwargs: Any,
     ):
         """
         Initialize the memory manager
@@ -78,6 +79,7 @@ class MemoryService:
             model_name=embedding_model,
             backend=embedding_backend,
             device=embedding_device or "cpu",
+            **embedding_kwargs,
         )
 
         # Initialize memory components
@@ -199,7 +201,11 @@ class MemoryService:
         return created_tasks
 
     def _setup_embedding(
-        self, model_name: str, backend: str, device: str | None = None
+        self,
+        model_name: str,
+        backend: str,
+        device: str | None = None,
+        **backend_kwargs: Any,
     ) -> None:
         """
         Set up the embedding system
@@ -215,6 +221,7 @@ class MemoryService:
             model_name=model_name,
             device=device or "cpu",
             cache_dir=os.path.join(self.data_dir, "embedding_cache"),
+            **backend_kwargs,
         )
 
     def add_user_message(self, message: str) -> None:
