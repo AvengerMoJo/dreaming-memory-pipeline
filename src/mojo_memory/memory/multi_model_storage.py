@@ -39,9 +39,26 @@ class MultiModelEmbeddingStorage:
         self.conversations = self._load_data(self.conversations_file)
         self.documents = self._load_data(self.documents_file)
 
+        # Content-hash index for O(1) exact-duplicate detection on store_document.
+        # Found live 2026-07-23: with no dedup at all, this file grew to 7036
+        # documents of which 71% (5008) were exact-duplicate text_content --
+        # dominated by report-boilerplate fragments from the dreaming
+        # pipeline's fallback extractor (see atomic_extractor.py
+        # _fallback_extraction, which had no dedup or content filter either).
+        self._content_hashes = {
+            self._content_hash(d.get("text_content", ""))
+            for d in self.documents
+            if d.get("text_content", "").strip()
+        }
+
         # Print actual counts
         print(f"📚 [MultiModelStorage] Loaded {len(self.documents)} documents from knowledge base")
         print(f"💬 [MultiModelStorage] Loaded {len(self.conversations)} conversation messages")
+
+    @staticmethod
+    def _content_hash(text: str) -> str:
+        import hashlib
+        return hashlib.sha256(text.strip().encode("utf-8")).hexdigest()
     
     def _load_data(self, key: str) -> List[Dict[str, Any]]:
         """Load list data from backend key."""
@@ -126,10 +143,27 @@ class MultiModelEmbeddingStorage:
         return message_id
     
     def store_document(self, content: str, metadata: Dict[str, Any],
-                      embedding_models: Dict[str, Any]) -> str:
-        """Store document with text + multiple embeddings"""
+                      embedding_models: Dict[str, Any]) -> Optional[str]:
+        """Store document with text + multiple embeddings.
+
+        Returns None (skips storing) if content is empty/whitespace-only or
+        an exact byte-for-byte duplicate of an already-stored document --
+        a duplicate carries no additional retrievable information, so
+        storing it again is pure bloat (embeddings + full-file rewrite cost)
+        for zero benefit. Not a hash-collision-proof guarantee, just cheap
+        exact-match dedup -- near-duplicates (paraphrases, minor edits)
+        are NOT caught here by design; that needs semantic dedup, out of
+        scope for this fix.
+        """
+        stripped = content.strip()
+        if not stripped:
+            return None
+        content_hash = self._content_hash(stripped)
+        if content_hash in self._content_hashes:
+            return None
+
         doc_id = f"doc_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{len(self.documents)}"
-        
+
         # Generate embeddings from all available models
         embeddings = {}
         model_versions = {}
@@ -155,6 +189,7 @@ class MultiModelEmbeddingStorage:
         }
         
         self.documents.append(doc_entry)
+        self._content_hashes.add(content_hash)
         self._save_data(self.documents, self.documents_file)
         
         return doc_id

@@ -136,13 +136,31 @@ class AtomicFactExtractor:
             units.append(unit)
         return units
 
+    # Below this length, a paragraph is essentially never a standalone fact
+    # -- it's a markdown header ("**Key Findings:**"), a bare list marker
+    # ("1."), or similar structural scaffolding. Found live 2026-07-23: with
+    # no filter here, 71% of the entire knowledge base (5008 of 7036
+    # documents) ended up being exact-duplicate boilerplate fragments from
+    # this fallback path, because task reports share the same section
+    # headers and this function turned every one into its own "fact."
+    _MIN_FALLBACK_PARAGRAPH_CHARS = 30
+
     def _fallback_extraction(self, doc_id: str, text: str) -> List[KnowledgeUnit]:
-        """Rule-based fallback: one unit per paragraph."""
+        """Rule-based fallback: one unit per paragraph, skipping paragraphs
+        too short to carry standalone meaning. Storage-layer dedup
+        (MultiModelEmbeddingStorage.store_document) is the other half of
+        this fix -- it catches exact-duplicate content regardless of
+        source; this filter reduces how much low-value content is
+        generated in the first place.
+        """
         self._log("Using rule-based fallback extraction", "warning")
         paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
-        total = len(paragraphs)
+        skipped = 0
         units = []
         for i, para in enumerate(paragraphs):
+            if len(para) < self._MIN_FALLBACK_PARAGRAPH_CHARS:
+                skipped += 1
+                continue
             first_sentence = para.split(".")[0].strip() + "." if "." in para else para[:120]
             unit = KnowledgeUnit(
                 id=f"ku_{doc_id}_{i}_fallback",
@@ -156,6 +174,8 @@ class AtomicFactExtractor:
                 created_at=datetime.now(),
             )
             units.append(unit)
+        if skipped:
+            self._log(f"Fallback extraction skipped {skipped} paragraph(s) under {self._MIN_FALLBACK_PARAGRAPH_CHARS} chars")
         return units
 
     # ------------------------------------------------------------------ #
