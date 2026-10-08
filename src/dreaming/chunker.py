@@ -6,6 +6,8 @@ Extracts entities, key_facts, labels, and speaker metadata per chunk.
 """
 
 import json
+
+from dreaming.json_repair import only_objects, repair_json_escapes
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 
@@ -122,6 +124,7 @@ class ConversationChunker:
         if response_clean.endswith("```"):
             response_clean = response_clean[:-3]
         response_clean = response_clean.strip()
+        response_clean = repair_json_escapes(response_clean)
 
         # Attempt strict parse first.
         try:
@@ -207,23 +210,23 @@ class ConversationChunker:
     def _normalize_chunk_payload(self, payload: Any) -> Optional[Dict[str, Any]]:
         """Normalize common model payload shapes into {"chunks":[...]}."""
         if isinstance(payload, dict):
-            if isinstance(payload.get("chunks"), list):
+            if only_objects(payload.get("chunks")):
                 return payload
             data = payload.get("data")
-            if isinstance(data, dict) and isinstance(data.get("chunks"), list):
+            if isinstance(data, dict) and only_objects(data.get("chunks")):
                 return {"chunks": data.get("chunks", [])}
             results = payload.get("results")
-            if isinstance(results, dict) and isinstance(results.get("chunks"), list):
+            if isinstance(results, dict) and only_objects(results.get("chunks")):
                 return {"chunks": results.get("chunks", [])}
-            if isinstance(payload.get("output"), dict) and isinstance(payload.get("output").get("chunks"), list):
+            if isinstance(payload.get("output"), dict) and only_objects(payload.get("output").get("chunks")):
                 return {"chunks": payload.get("output").get("chunks", [])}
-            if isinstance(payload.get("items"), list):
+            if only_objects(payload.get("items")):
                 return {"chunks": payload.get("items", [])}
-            if isinstance(payload.get("segments"), list):
+            if only_objects(payload.get("segments")):
                 return {"chunks": payload.get("segments", [])}
-            if isinstance(payload.get("sections"), list):
+            if only_objects(payload.get("sections")):
                 return {"chunks": payload.get("sections", [])}
-        elif isinstance(payload, list):
+        elif only_objects(payload):
             return {"chunks": payload}
         return None
 

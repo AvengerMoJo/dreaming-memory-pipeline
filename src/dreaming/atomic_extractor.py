@@ -17,6 +17,8 @@ Use this for document-type inputs. Use ConversationChunker for conversations.
 from __future__ import annotations
 
 import json
+
+from dreaming.json_repair import only_objects, repair_json_escapes
 import logging
 from datetime import datetime
 from typing import Any, Dict, List, Optional
@@ -191,6 +193,7 @@ class AtomicFactExtractor:
         if clean.endswith("```"):
             clean = clean[:-3]
         clean = clean.strip()
+        clean = repair_json_escapes(clean)
 
         try:
             parsed = json.loads(clean)
@@ -216,13 +219,13 @@ class AtomicFactExtractor:
 
     def _normalize(self, payload: Any) -> Optional[Dict[str, Any]]:
         if isinstance(payload, dict):
-            if isinstance(payload.get("knowledge_units"), list):
+            if only_objects(payload.get("knowledge_units")):
                 return payload
-            if isinstance(payload.get("units"), list):
+            if only_objects(payload.get("units")):
                 return {"knowledge_units": payload["units"]}
-            if isinstance(payload.get("facts"), list):
+            if only_objects(payload.get("facts")):
                 return {"knowledge_units": payload["facts"]}
-        if isinstance(payload, list):
+        if only_objects(payload):
             return {"knowledge_units": payload}
         return None
 

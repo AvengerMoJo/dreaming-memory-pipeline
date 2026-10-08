@@ -7,6 +7,8 @@ Creates topic clusters, relationship maps, timelines, and actionable clusters
 """
 
 import json
+
+from dreaming.json_repair import only_objects, repair_json_escapes
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 
@@ -130,6 +132,7 @@ class DreamingSynthesizer:
         if response_clean.endswith("```"):
             response_clean = response_clean[:-3]
         response_clean = response_clean.strip()
+        response_clean = repair_json_escapes(response_clean)
 
         try:
             parsed = json.loads(response_clean)
@@ -207,19 +210,19 @@ class DreamingSynthesizer:
 
     def _normalize_cluster_payload(self, payload: Any) -> Optional[Dict[str, Any]]:
         if isinstance(payload, dict):
-            if isinstance(payload.get("clusters"), list):
+            if only_objects(payload.get("clusters")):
                 return payload
             data = payload.get("data")
-            if isinstance(data, dict) and isinstance(data.get("clusters"), list):
+            if isinstance(data, dict) and only_objects(data.get("clusters")):
                 return {"clusters": data.get("clusters", [])}
             results = payload.get("results")
-            if isinstance(results, dict) and isinstance(results.get("clusters"), list):
+            if isinstance(results, dict) and only_objects(results.get("clusters")):
                 return {"clusters": results.get("clusters", [])}
-            if isinstance(payload.get("items"), list):
+            if only_objects(payload.get("items")):
                 return {"clusters": payload.get("items", [])}
-            if isinstance(payload.get("output"), dict) and isinstance(payload.get("output").get("clusters"), list):
+            if isinstance(payload.get("output"), dict) and only_objects(payload.get("output").get("clusters")):
                 return {"clusters": payload.get("output").get("clusters", [])}
-        elif isinstance(payload, list):
+        elif only_objects(payload):
             return {"clusters": payload}
         return None
 
